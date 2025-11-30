@@ -111,3 +111,60 @@ export function calcularRegistrosDeCompras(
         return compra;
     });
 }
+
+// src/lib/calculos.ts (Añadir a las funciones existentes)
+
+interface ProductoCalculado {
+    sku_clave: string;
+    stock_real: number;
+    costo_promedio_gs: number;
+}
+
+/**
+ * Calcula el STOCK REAL y el COSTO PROMEDIO para un SKU.
+ * Este cálculo necesita la suma de todos los campos de COMPRAS y VENTAS.
+ * * @param compras - Todos los registros de la tabla 'compras'.
+ * @param ventas - Todos los registros de la tabla 'ventas'.
+ * @param sku - El SKU específico a calcular.
+ */
+export function calcularStockYCostoPromedio(
+    compras: any[], 
+    ventas: any[], 
+    sku: string
+): ProductoCalculado {
+    
+    // 1. Calcular Unidades Adquiridas (Suma de unidades_totales en Compras)
+    const totalUnidadesAdquiridas = compras
+        .filter(compra => compra.sku_id_producto === sku)
+        .reduce((sum, compra) => sum + (compra.unidades_totales || 0), 0);
+        
+    // 2. Calcular Unidades Vendidas
+    const totalUnidadesVendidas = ventas
+        .filter(venta => venta.sku_vendido === sku)
+        .reduce((sum, venta) => sum + (venta.cantidad_vendida || 0), 0);
+
+    // 3. Calcular el Stock Real
+    const stockReal = totalUnidadesAdquiridas - totalUnidadesVendidas;
+
+    // 4. Calcular el Costo Total para el Promedio (Numerador)
+    const costoTotalAgregado = compras
+        .filter(compra => compra.sku_id_producto === sku)
+        .reduce((sum, compra) => {
+            // Sumamos: Costo Total Lote PYG + Costo Retiro Distribuido PYG
+            const costoLote = compra.costo_total_lote_pyg || 0;
+            const costoRetiro = compra.costo_retiro_distribuido_pyg || 0;
+            return sum + costoLote + costoRetiro;
+        }, 0);
+
+    // 5. Calcular el Costo Promedio (Costo Total / Unidades Adquiridas)
+    let costoPromedioGs = 0;
+    if (totalUnidadesAdquiridas > 0) {
+        costoPromedioGs = costoTotalAgregado / totalUnidadesAdquiridas;
+    }
+
+    return {
+        sku_clave: sku,
+        stock_real: stockReal,
+        costo_promedio_gs: parseFloat(costoPromedioGs.toFixed(2)), // Redondear a 2 decimales
+    };
+}
