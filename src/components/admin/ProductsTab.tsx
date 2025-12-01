@@ -5,22 +5,21 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
-import { calcularStockYCostoPromedio } from "@/lib/calculos"; // USANDO EL CÁLCULO CONSOLIDADO
-import ProductsList from "./ProductsList"; // Componente para mostrar la tabla
+import { calcularStockYCostoPromedio } from "@/lib/calculos"; 
+import ProductsList from "./ProductsList"; // Componente para mostrar la tabla (asumido)
 
-// --- Tipos de Datos Iniciales para el Formulario ---
+// --- Tipos de Datos ---
 const initialFormData = {
     'sku_clave': '',
     'nombre_producto': '',
-    'precio_definitivo_gs': 0,
+    'precio_definitivo_pyg': 0, // Ajustado a PYG
 };
 
-// --- Tipos de Datos de la Tabla (para visualización) ---
 interface ProductRow {
     id: string; 
     sku_clave: string;
     nombre_producto: string;
-    precio_definitivo_gs: number;
+    precio_definitivo_pyg: number;
     stock_real: number;
     costo_promedio_gs: number;
 }
@@ -44,14 +43,14 @@ const ProductsTab = () => {
             const { data: allCompras, error: compError } = await supabase.from('compras').select('*');
             if (compError) throw compError;
             
-            const { data: allVentas, error: ventaError } = await supabase.from('ventas').select('*');
+            const { data: allVentas, error: ventaError } = await supabase.from('ventas').select('sku_vendido, cantidad_vendida');
             if (ventaError) throw ventaError;
 
             // 3. Aplicar el cálculo de Stock y Costo Promedio a cada producto
             const calculatedProducts: ProductRow[] = baseProducts.map((prod) => {
                 const calculated = calcularStockYCostoPromedio(
-                    allCompras,
-                    allVentas,
+                    allCompras as any[],
+                    allVentas as any[],
                     prod.sku_clave
                 );
                 
@@ -59,7 +58,7 @@ const ProductsTab = () => {
                     id: prod.id,
                     sku_clave: prod.sku_clave,
                     nombre_producto: prod.nombre_producto,
-                    precio_definitivo_gs: prod.precio_definitivo_gs,
+                    precio_definitivo_pyg: prod.precio_definitivo_pyg,
                     stock_real: calculated.stock_real,
                     costo_promedio_gs: calculated.costo_promedio_gs,
                 };
@@ -83,7 +82,7 @@ const ProductsTab = () => {
         const { name, value } = e.target;
         setFormData(prev => ({
             ...prev,
-            [name]: name === 'precio_definitivo_gs'
+            [name]: name === 'precio_definitivo_pyg'
                 ? parseFloat(value) || 0
                 : value,
         }));
@@ -97,20 +96,16 @@ const ProductsTab = () => {
             const dataToInsert = {
                 sku_clave: formData.sku_clave,
                 nombre_producto: formData.nombre_producto,
-                precio_definitivo_gs: formData.precio_definitivo_gs,
-                // stock_real y costo_promedio_gs se calcularán y se actualizarán 
-                // automáticamente con la función fetchProductData
-                stock_real: 0, 
-                costo_promedio_gs: 0,
+                precio_definitivo_pyg: formData.precio_definitivo_pyg,
             };
 
             const { error } = await supabase
                 .from('productos')
-                .insert([dataToInsert]); 
+                .upsert([dataToInsert], { onConflict: 'sku_clave' }); // Usamos UPSERT para actualizar si el SKU existe
 
             if (error) throw error;
 
-            toast.success("Producto base registrado. Calculando inventario...");
+            toast.success("Producto base registrado/actualizado. Calculando inventario...");
             setFormData(initialFormData);
             fetchProductData(); // Recargar datos para ver el nuevo producto
             
@@ -122,7 +117,7 @@ const ProductsTab = () => {
         }
     };
 
-    // Funciones básicas para ProductsList (simplificadas por ahora)
+    // Funciones de mantenimiento simples para la lista (asumidas)
     const handleEdit = (product: ProductRow) => toast.info(`Función de edición para ${product.sku_clave} no implementada.`);
     const handleDelete = async (id: string) => {
         const { error } = await supabase.from('productos').delete().eq('id', id);
@@ -130,7 +125,7 @@ const ProductsTab = () => {
             toast.error("Error al eliminar producto: " + error.message);
         } else {
             toast.success("Producto eliminado.");
-            fetchProductData(); // Recargar la lista
+            fetchProductData(); 
         }
     };
 
@@ -138,12 +133,13 @@ const ProductsTab = () => {
     return (
         <Card>
             <CardHeader>
-                <CardTitle>Gestión de Inventario y Costos</CardTitle>
+                <CardTitle>📦 Gestión de Inventario y Costos</CardTitle>
                 <CardDescription>
-                    Registra nuevos productos y visualiza el stock y el costo promedio calculado.
+                    Registra nuevos productos base y visualiza el stock y el costo promedio calculado.
                 </CardDescription>
             </CardHeader>
             <CardContent>
+                {/* Formulario de registro de producto base */}
                 <form onSubmit={handleSubmit} className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8 p-4 border rounded-lg bg-secondary/10">
                     <div className="space-y-2">
                         <Label htmlFor="sku_clave">SKU (Clave)</Label>
@@ -154,18 +150,19 @@ const ProductsTab = () => {
                         <Input id="nombre_producto" name="nombre_producto" value={formData.nombre_producto} onChange={handleChange} required />
                     </div>
                     <div className="space-y-2">
-                        <Label htmlFor="precio_definitivo_gs">Precio de Venta (G$)</Label>
-                        <Input id="precio_definitivo_gs" name="precio_definitivo_gs" type="number" step="1" value={formData.precio_definitivo_gs} onChange={handleChange} min="0" required />
+                        <Label htmlFor="precio_definitivo_pyg">Precio de Venta (PYG)</Label>
+                        <Input id="precio_definitivo_pyg" name="precio_definitivo_pyg" type="number" step="1" value={formData.precio_definitivo_pyg} onChange={handleChange} min="0" required />
                     </div>
                     
                     <div className="space-y-2 flex items-end">
                         <Button type="submit" disabled={isSubmitting} className="w-full">
-                            {isSubmitting ? "Guardando..." : "Registrar Producto"}
+                            {isSubmitting ? "Guardando..." : "Registrar/Actualizar Producto"}
                         </Button>
                     </div>
                 </form>
 
-                <h3 className="text-xl font-semibold mb-4">Inventario Actual</h3>
+                {/* Lista de Inventario Actual */}
+                <h3 className="text-xl font-semibold mb-4">Inventario Actual (Stock y Costo Calculado)</h3>
                 {loading ? (
                     <div className="text-center py-12">Cargando y calculando datos...</div>
                 ) : (
