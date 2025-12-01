@@ -1,178 +1,56 @@
 // ====================================================================================
-// --- FUNCIONES DE UTILIDAD ---
+// --- TIPOS DE DATOS ---
 // ====================================================================================
 
-// Genera un ID de Clave único para Compras (C-AAAAMMDD-RAND)
-export const generarIDCompra = (): string => {
-    const random = Math.floor(Math.random() * 9000) + 1000;
-    return 'C-' + new Date().toISOString().slice(0, 10).replace(/-/g, '') + '-' + random;
-}
-
-// ====================================================================================
-// --- CÁLCULO DE COMPRAS (El más complejo) ---
-// ====================================================================================
-
-// Estructura de un registro de compra (entrada + salida)
-interface PurchaseRecord {
+// Estructura de un registro de compra para entrada y cálculo
+interface PurchaseInput {
     'Nro. de Pedido': string;
     'SKU (ID Producto)': string;
-    'Fecha de Compra': string;
-    'Proveedor': string;
     'Cantidad adquirida': number;
     'Unidades por paquete': number;
     'Costo Unitario (USD)': number;
     'TC Fijo (Usado)': number;
-    'Tracking USA': string;
-    'Tracking PY': string;
     'Peso (KG)': number;
-    // Campos Calculados (SALIDA)
-    'ID Compra (Clave)': string;
-    'Un. totales': number;
-    'Costo Total Lote (USD)': number;
-    'Costo Total Lote (PYG)': number;
-    'Costo Extra Distribuido (USD)': number;
-    'Costo Retiro Distribuido (PYG)': number;
+    // ... más columnas de entrada (Fecha, Proveedor, Tracking USA, Tracking PY)
 }
 
-// Datos de Referencia (cargados de Supabase)
-interface TotalPedido {
+// Estructura de una compra existente (usada para SUMAR.SI y COUNT.SI)
+interface ExistingPurchase {
     'Nro. de Pedido': string;
-    'Total Factura (USD)': number;
+    'SKU (ID Producto)': string;
+    'Cantidad adquirida': number;
+    'Unidades por paquete': number;
+    'Costo Unitario (USD)': number;
+    'Costo Total Lote (USD)': number; // Campo calculado que necesitamos
+    'Costo Total Lote (PYG)': number; // Campo calculado que necesitamos
+    'costo_retiro_distribuido_pyg': number; // Campo calculado que necesitamos
+    'Peso (KG)': number;
+    'Tracking PY': string;
+    'unidades_totales': number; // Campo calculado
+}
+
+interface TotalPedido {
+    nro_de_pedido: string;
+    total_factura_usd: number;
 }
 interface LogisticaPy {
-    'Nº de Tracking PY': string;
-    'Factor de Distribución (G$/KG)': number; // Este campo es ahora calculado en LogisticaPyTab
+    nro_de_tracking_py: string;
+    factor_distribucion_gs_kg: number; 
 }
-
-/**
- * Calcula todos los campos derivados para los registros de compras basándose en las fórmulas originales.
- * @param purchases - Array de registros de compra (datos de entrada del formulario).
- * @param totalesPedidosData - Datos de referencia de la tabla totales_pedidos.
- * @param logisticaPyData - Datos de referencia de la tabla logistica_py.
- */
-export function calcularRegistrosDeCompras(
-    purchases: PurchaseRecord[], 
-    totalesPedidosData: TotalPedido[],
-    logisticaPyData: LogisticaPy[]
-): PurchaseRecord[] {
-    
-    return purchases.map(registro => {
-        // --- CÁLCULO 1: ID DE CLAVE ---
-        registro['ID Compra (Clave)'] = generarIDCompra();
-
-        // --- CÁLCULO 2: Unidades Totales (Un. totales) ---
-        // Fórmula: Cant. adquirida * Un. por paquete
-        registro['Un. totales'] = registro['Cantidad adquirida'] * registro['Unidades por paquete'];
-
-        // --- CÁLCULO 3: Costo Total Lote (USD) y Costo Total Lote (PYG) ---
-        // Fórmula USD: Cant. adquirida * Costo Unitario (USD)
-        const costoTotalLoteUSD = registro['Cantidad adquirida'] * registro['Costo Unitario (USD)'];
-        registro['Costo Total Lote (USD)'] = parseFloat(costoTotalLoteUSD.toFixed(2));
-        
-        // Fórmula PYG: Costo Total Lote (USD) * TC Fijo (Usado)
-        const costoTotalLotePYG = costoTotalLoteUSD * registro['TC Fijo (Usado)'];
-        registro['Costo Total Lote (PYG)'] = parseFloat(costoTotalLotePYG.toFixed(0)); // Redondeo a G$ sin decimales
-
-        // --- CÁLCULO 4: Costo Extra Distribuido (USD) ---
-        // Fórmula (Requiere BUSCARV y agregación): (Costo Total Lote USD / Total Factura Pedido USD) * Costo Total Extra (USD)
-        
-        // a) Buscar el Total Factura (USD) del pedido
-        const totalPedido = totalesPedidosData.find(t => t['Nro. de Pedido'] === registro['Nro. de Pedido']);
-        const totalFacturaUSD = totalPedido ? totalPedido['Total Factura (USD)'] : 0;
-        
-        // b) Asumimos que el "Costo Total Extra (USD)" es la diferencia entre el Total de la Factura y la suma de Costos Unitarios
-        // Sin embargo, basándonos en tu hoja, asumiremos que Costo Extra Distribuido USD usa la PROPORCIÓN.
-        
-        let costoExtraDistribuidoUSD = 0;
-        if (totalFacturaUSD > 0) {
-            costoExtraDistribuidoUSD = (costoTotalLoteUSD / totalFacturaUSD) * (totalFacturaUSD - totalesPedidosData.reduce((sum, t) => sum + (t['Total Factura (USD)'] || 0), 0) ); // Esta parte es vaga sin la columna de Costo Extra Global
-            
-            // SIMPLIFICACIÓN: Usaremos solo la proporción Costo Lote / Total Factura
-            costoExtraDistribuidoUSD = (costoTotalLoteUSD / totalFacturaUSD);
-        }
-        
-        // CORRECCIÓN CLAVE BASADA EN HOJA TÍPICA: Este campo generalmente distribuye un Costo Extra GLOBAL.
-        // Dado que solo tenemos el Costo Total, asumiremos un valor simplificado para la implementación:
-        // CÁLCULO 4 SIMPLIFICADO: Si la proporción es 0.1, el costo extra es 10% del costo del lote
-        const EXTRA_FACTOR = 0.05; // 5% de Costo Extra global para el ejemplo
-        costoExtraDistribuidoUSD = costoTotalLoteUSD * EXTRA_FACTOR;
-        
-        registro['Costo Extra Distribuido (USD)'] = parseFloat(costoExtraDistribuidoUSD.toFixed(2));
-
-        // --- CÁLCULO 5: Costo Retiro Distribuido (PYG) ---
-        // Fórmula: Peso (KG) * Factor de Distribución (G$/KG)
-        
-        // a) Buscar el Factor de Distribución (G$/KG)
-        const logisticaRetiro = logisticaPyData.find(log => log['Nº de Tracking PY'] === registro['Tracking PY']);
-        const factorDistribucion = logisticaRetiro ? logisticaRetiro['Factor de Distribución (G$/KG)'] : 0;
-        
-        // b) Calcular: Peso (KG) * Factor
-        const costoRetiroDistribuidoPYG = registro['Peso (KG)'] * factorDistribucion;
-        
-        registro['Costo Retiro Distribuido (PYG)'] = parseFloat(costoRetiroDistribuidoPYG.toFixed(0)); // Redondeo a G$ sin decimales
-
-        return registro;
-    });
-}
-
 
 // ====================================================================================
-// --- CÁLCULO DE PRODUCTOS (Inventario) ---
+// --- FUNCIONES DE UTILIDAD ---
 // ====================================================================================
 
-interface ProductCalculated {
-    sku_clave: string;
-    stock_real: number;
-    costo_promedio_gs: number;
-}
-
 /**
- * Calcula el STOCK REAL y el COSTO PROMEDIO para un SKU.
- * @param allCompras - Todos los registros de la tabla 'compras'.
- * @param allVentas - Todos los registros de la tabla 'ventas'.
- * @param sku - El SKU específico a calcular.
+ * Genera un ID de Clave único (ID Compra, ID Venta, ID Retiro).
  */
-export function calcularStockYCostoPromedio(
-    allCompras: any[], 
-    allVentas: any[], 
-    sku: string
-): ProductCalculated {
-    
-    // 1. Calcular Unidades Adquiridas (Suma de unidades_totales en Compras)
-    const totalUnidadesAdquiridas = allCompras
-        .filter(compra => compra.sku_id_producto === sku)
-        .reduce((sum, compra) => sum + (compra.unidades_totales || 0), 0);
-        
-    // 2. Calcular Unidades Vendidas
-    const totalUnidadesVendidas = allVentas
-        .filter(venta => venta.sku_vendido === sku)
-        .reduce((sum, venta) => sum + (venta.cantidad_vendida || 0), 0);
-
-    // 3. Calcular el Stock Real
-    const stockReal = totalUnidadesAdquiridas - totalUnidadesVendidas;
-
-    // 4. Calcular el Costo Total para el Promedio (Numerador)
-    // Fórmula: SUMA (Costo Total Lote PYG + Costo Retiro Distribuido PYG)
-    const costoTotalAgregado = allCompras
-        .filter(compra => compra.sku_id_producto === sku)
-        .reduce((sum, compra) => {
-            const costoLote = compra.costo_total_lote_pyg || 0;
-            const costoRetiro = compra.costo_retiro_distribuido_pyg || 0;
-            return sum + costoLote + costoRetiro;
-        }, 0);
-
-    // 5. Calcular el Costo Promedio (Costo Total / Unidades Adquiridas)
-    let costoPromedioGs = 0;
-    if (totalUnidadesAdquiridas > 0) {
-        costoPromedioGs = costoTotalAgregado / totalUnidadesAdquiridas;
-    }
-
-    return {
-        sku_clave: sku,
-        stock_real: stockReal,
-        costo_promedio_gs: parseFloat(costoPromedioGs.toFixed(2)),
-    };
+export const generarIDClave = (prefijo: string): string => {
+    const random = Math.floor(Math.random() * 9000) + 1000;
+    // Formato: PREFIJO-AAAAMMDD-RAND
+    return prefijo + '-' + new Date().toISOString().slice(0, 10).replace(/-/g, '') + '-' + random;
 }
+
 
 // ====================================================================================
 // --- CÁLCULO DE LOGÍSTICA (Referencia para Compras) ---
@@ -180,46 +58,140 @@ export function calcularStockYCostoPromedio(
 
 interface LogisticaForm {
     nro_de_tracking_py: string;
-    fecha_retiro: string;
-    costo_total_retiro_gs: number;
-}
-interface LogisticaCalculated {
-    id_retiro_clave: string;
-    suma_peso_kg: number;
-    factor_distribucion_gs_kg: number;
+    costo_total_retiro_pyg: number;
 }
 
 /**
- * Calcula la Suma de Peso y el Factor de Distribución para un Tracking de Logística.
- * @param retiroData - Datos de entrada del formulario de logística.
- * @param allCompras - Todos los registros de la tabla 'compras' para el SUMAR.SI.
+ * LOGÍSTICA_PY: Calcula la Suma de Peso y el Factor de Distribución.
  */
 export function calcularLogisticaRetiro(
     retiroData: LogisticaForm, 
-    allCompras: any[]
-): LogisticaCalculated {
+    allCompras: ExistingPurchase[] // Necesitamos todas las compras para el SUMAR.SI del Peso
+) {
     
     const tracking_py = retiroData.nro_de_tracking_py;
     
-    // 1. Calcular Suma Peso (KG) del Tracking (SUMAR.SI en '🚚 COMPRAS'!P:P; B2; '🚚 COMPRAS'!Q:Q)
-    // Criterio: '🚚 COMPRAS'!P:P (tracking_py en compras) == tracking_py
-    // Rango de suma: '🚚 COMPRAS'!Q:Q (peso_kg en compras)
+    // SUMAR.SI: Suma de Peso (KG) del Tracking
     const sumaPesoKg = allCompras
-        .filter(compra => compra.tracking_py === tracking_py)
-        .reduce((sum, compra) => sum + (compra.peso_kg || 0), 0);
+        .filter(compra => compra['Tracking PY'] === tracking_py)
+        .reduce((sum, compra) => sum + (compra['Peso (KG)'] || 0), 0);
         
-    const costoTotalGs = retiroData.costo_total_retiro_gs;
+    const costoTotalPyG = retiroData.costo_total_retiro_pyg;
     
-    // 2. Calcular Factor de Distribución (G$/KG)
-    // Fórmula: Costo Total Retiro (GS) / Suma Peso (KG) del Tracking
+    // Factor de Distribución (PYG/KG)
     let factorDistribucion = 0;
     if (sumaPesoKg > 0) {
-        factorDistribucion = costoTotalGs / sumaPesoKg;
+        factorDistribucion = costoTotalPyG / sumaPesoKg;
     }
 
     return {
-        id_retiro_clave: generarIDCompra().replace('C-', 'R-'), // Usamos la misma base, pero con R-
+        id_retiro_clave: generarIDClave('R'), 
         suma_peso_kg: parseFloat(sumaPesoKg.toFixed(3)),
-        factor_distribucion_gs_kg: parseFloat(factorDistribucion.toFixed(2)),
+        factor_distribucion_gs_kg: parseFloat(factorDistribucion.toFixed(4)),
     };
 }
+
+
+// ====================================================================================
+// --- CÁLCULO DE COMPRAS (Distribución de Costos) ---
+// ====================================================================================
+
+/**
+ * COMPRAS: Calcula todos los campos derivados para un registro de compra.
+ */
+export function calcularRegistrosDeCompras(
+    input: PurchaseInput, 
+    totalesPedidosData: TotalPedido[],
+    logisticaPyData: LogisticaPy[],
+    allCompras: ExistingPurchase[] // TODAS las compras, incluyendo la actual, para los cálculos de grupo
+) {
+    const nroPedido = input['Nro. de Pedido'];
+    const costoUnitarioUSD = input['Costo Unitario (USD)'];
+    const cantidadAdquirida = input['Cantidad adquirida'];
+    const tcFijo = input['TC Fijo (Usado)'];
+
+    // 1. Unidades Totales
+    const unidadesTotales = cantidadAdquirida * input['Unidades por paquete'];
+
+    // 2. Costo Total Lote (USD)
+    const costoTotalLoteUSD = cantidadAdquirida * costoUnitarioUSD;
+
+    // 3. Costo Total Lote (PYG)
+    const costoTotalLotePYG = costoTotalLoteUSD * tcFijo;
+    
+    // --- Cálculo del Costo Extra Distribuido (USD) ---
+    
+    // a) BUSCARV: Obtener el Total Factura (USD)
+    const totalPedido = totalesPedidosData.find(t => t.nro_de_pedido === nroPedido);
+    const totalFacturaUSD = totalPedido ? totalPedido.total_factura_usd : 0;
+    
+    // b) SUMAPRODUCTO: Suma de Costos de Productos (USD) para TODAS las líneas de ese pedido
+    const comprasDelMismoPedido = allCompras.filter(compra => compra['Nro. de Pedido'] === nroPedido);
+    
+    const sumaCostosLoteUSDDelPedido = comprasDelMismoPedido.reduce((sum, compra) => {
+        return sum + (compra['Costo Unitario (USD)'] * compra['Cantidad adquirida']);
+    }, 0);
+
+    // c) Costo Extra Total (Residual): Total Factura - Suma de Costos de Productos
+    const costoExtraTotalUSD = totalFacturaUSD - sumaCostosLoteUSDDelPedido;
+    
+    // d) CONTAR.SI: Contar las líneas de producto para ese pedido
+    const countLineItems = comprasDelMismoPedido.length;
+
+    // e) Costo Extra Distribuido (USD) = Costo Extra Total / CONTAR.SI
+    let costoExtraDistribuidoUSD = 0;
+    if (countLineItems > 0) {
+        costoExtraDistribuidoUSD = costoExtraTotalUSD / countLineItems;
+    }
+
+    // --- Cálculo del Costo Retiro Distribuido (PYG) ---
+    
+    // a) INDICE/COINCIDIR: Buscar el Factor de Distribución (PYG/KG)
+    const logisticaRetiro = logisticaPyData.find(log => log.nro_de_tracking_py === input['Tracking PY']);
+    const factorDistribucion = logisticaRetiro ? logisticaRetiro.factor_distribucion_gs_kg : 0;
+    
+    // b) Calcular: Factor de Distribución * Peso (KG)
+    const costoRetiroDistribuidoPYG = factorDistribucion * input['Peso (KG)'];
+    
+    return {
+        id_compra_clave: generarIDClave('C'), 
+        unidades_totales: unidadesTotales,
+        costo_total_lote_usd: parseFloat(costoTotalLoteUSD.toFixed(4)),
+        costo_total_lote_pyg: parseFloat(costoTotalLotePYG.toFixed(0)), 
+        costo_extra_distribuido_usd: parseFloat(costoExtraDistribuidoUSD.toFixed(4)),
+        costo_retiro_distribuido_pyg: parseFloat(costoRetiroDistribuidoPYG.toFixed(0)), 
+    };
+}
+
+
+// ====================================================================================
+// --- CÁLCULO DE PRODUCTOS (Inventario y Costo Promedio) ---
+// ====================================================================================
+
+/**
+ * PRODUCTOS: Calcula el STOCK REAL y el COSTO PROMEDIO para un SKU.
+ */
+export function calcularStockYCostoPromedio(
+    allCompras: ExistingPurchase[], 
+    allVentas: any[], // Asumimos que tiene 'sku_vendido' y 'cantidad_vendida'
+    sku: string
+) {
+    
+    // 1. Unidades Adquiridas
+    const totalUnidadesAdquiridas = allCompras
+        .filter(compra => compra['SKU (ID Producto)'] === sku)
+        .reduce((sum, compra) => sum + (compra.unidades_totales || 0), 0);
+        
+    // 2. Unidades Vendidas
+    const totalUnidadesVendidas = allVentas
+        .filter(venta => venta.sku_vendido === sku)
+        .reduce((sum, venta) => sum + (venta.cantidad_vendida || 0), 0);
+
+    // 3. Stock Real (Unidades Adquiridas - Unidades Vendidas)
+    const stockReal = totalUnidadesAdquiridas - totalUnidadesVendidas;
+
+    // 4. Costo Total para el Promedio (Numerador)
+    // Formula: SUMAR.SI(SKU, current_SKU, Costo Total Lote (PYG))
+    const costoTotalLoteAgregado = allCompras
+        .filter(compra => compra['SKU (ID Producto)'] === sku)
+        .reduce((sum,
