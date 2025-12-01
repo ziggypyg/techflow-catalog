@@ -6,38 +6,42 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
-
-// Genera un ID de Venta (V-AAAAMMDD-RAND)
-const generarIDVenta = (): string => {
-    const random = Math.floor(Math.random() * 9000) + 1000;
-    return 'V-' + new Date().toISOString().slice(0, 10).replace(/-/g, '') + '-' + random;
-}
+import { calcularPrecioDeVenta } from "@/lib/calculos";
 
 const initialFormData = {
     'sku_vendido': '',
-    'fecha_hora': new Date().toISOString().slice(0, 16), // Formato YYYY-MM-DDTHH:MM
+    'fecha': new Date().toISOString().slice(0, 10), 
     'cantidad_vendida': 0,
     'cliente': '',
+    'numero_comprobante_transferencia': '',
+    'notas': '',
 };
+
+interface ProductData {
+    sku_clave: string;
+    nombre_producto: string;
+    precio_definitivo_pyg: number;
+    costo_promedio_gs: number;
+}
 
 const SalesTab = () => {
     const [formData, setFormData] = useState(initialFormData);
     const [isSubmitting, setIsSubmitting] = useState(false);
-    const [products, setProducts] = useState<any[]>([]);
+    const [products, setProducts] = useState<ProductData[]>([]);
     const [loadingProducts, setLoadingProducts] = useState(true);
 
-    // --- Carga de Productos para el Select ---
+    // --- Carga de Productos y Costos Promedio ---
     useEffect(() => {
         const fetchProducts = async () => {
             setLoadingProducts(true);
             try {
-                // Seleccionamos SKU, Nombre y Precio de Venta
+                // Seleccionamos SKU, Nombre, Precio de Venta (ENTRADA) y Costo Promedio (CALCULADO)
                 const { data, error } = await supabase
                     .from('productos')
-                    .select('sku_clave, nombre_producto, precio_definitivo_gs, costo_promedio_gs'); 
+                    .select('sku_clave, nombre_producto, precio_definitivo_pyg, costo_promedio_gs'); 
                 
                 if (error) throw error;
-                setProducts(data);
+                setProducts(data as ProductData[]);
             } catch (error) {
                 toast.error("Error al cargar la lista de productos.");
             } finally {
@@ -47,7 +51,7 @@ const SalesTab = () => {
         fetchProducts();
     }, []);
 
-    const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
         const { name, value } = e.target;
         setFormData(prev => ({
             ...prev,
@@ -72,21 +76,27 @@ const SalesTab = () => {
             return;
         }
 
-        const idVenta = generarIDVenta();
-        const precioVentaGs = selectedProduct.precio_definitivo_gs || 0;
+        // 1. Obtener datos calculados (ID Venta y Precio de Venta por BUSCARV)
+        const calculated = calcularPrecioDeVenta(formData.sku_vendido, products);
+        
+        const precioVentaPyG = calculated.precio_de_venta_pyg;
         const costoPromedioGs = selectedProduct.costo_promedio_gs || 0;
-        const gananciaGs = (precioVentaGs - costoPromedioGs) * formData.cantidad_vendida;
+        
+        // Calcular Ganancia
+        const gananciaGs = (precioVentaPyG - costoPromedioGs) * formData.cantidad_vendida;
 
         try {
             const dataToInsert = {
-                id_venta: idVenta,
-                fecha_hora: formData.fecha_hora,
+                id_venta: calculated.id_venta_clave,
+                fecha: formData.fecha,
                 sku_vendido: formData.sku_vendido,
                 cantidad_vendida: formData.cantidad_vendida,
                 cliente: formData.cliente,
-                // Datos calculados (o referenciados)
-                precio_venta_gs: precioVentaGs,
-                ganancia_gs: parseFloat(gananciaGs.toFixed(0)), // Redondeo a G$ sin decimales
+                numero_comprobante_transferencia: formData.numero_comprobante_transferencia,
+                notas: formData.notas,
+                // Datos calculados
+                precio_venta_pyg: precioVentaPyG,
+                ganancia_gs: parseFloat(gananciaGs.toFixed(0)), 
             };
 
             const { error } = await supabase
@@ -95,7 +105,7 @@ const SalesTab = () => {
 
             if (error) throw error;
 
-            toast.success(`Venta ${idVenta} registrada. Ganancia calculada: G$ ${gananciaGs.toLocaleString('es-PY')}`);
+            toast.success(`Venta ${calculated.id_venta_clave} registrada. Ganancia: G$ ${gananciaGs.toLocaleString('es-PY')}`);
             setFormData(initialFormData);
             
         } catch (error: any) {
@@ -109,18 +119,17 @@ const SalesTab = () => {
     return (
         <Card>
             <CardHeader>
-                <CardTitle>Gestión de Ventas</CardTitle>
+                <CardTitle>💰 Registro de Ventas</CardTitle>
                 <CardDescription>
                     Registra una venta. El Precio de Venta se carga automáticamente del inventario.
                 </CardDescription>
             </CardHeader>
             <CardContent>
                 {loadingProducts ? (
-                    <div className="flex justify-center items-center h-20">
-                         <p className="animate-pulse">Cargando productos...</p>
-                    </div>
+                    <div className="flex justify-center items-center h-20"><p className="animate-pulse">Cargando productos...</p></div>
                 ) : (
-                    <form onSubmit={handleSubmit} className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                    <form onSubmit={handleSubmit} className="grid grid-cols-1 md:grid-cols-4 gap-6">
+                        {/* Fila 1 */}
                         <div className="space-y-2">
                             <Label htmlFor="sku_vendido">Producto (SKU)</Label>
                             <Select onValueChange={handleSelectChange} value={formData.sku_vendido} required>
@@ -130,14 +139,11 @@ const SalesTab = () => {
                                 <SelectContent>
                                     {products.map(product => (
                                         <SelectItem key={product.sku_clave} value={product.sku_clave}>
-                                            {`${product.nombre_producto} (G$ ${product.precio_definitivo_gs?.toLocaleString('es-PY') || '0'})`}
+                                            {`${product.nombre_producto} (G$ ${product.precio_definitivo_pyg?.toLocaleString('es-PY') || '0'})`}
                                         </SelectItem>
                                     ))}
                                 </SelectContent>
                             </Select>
-                            <p className="text-sm text-muted-foreground mt-1">
-                                Precio Venta: G$ {products.find(p => p.sku_clave === formData.sku_vendido)?.precio_definitivo_gs?.toLocaleString('es-PY') || '0'}
-                            </p>
                         </div>
                         
                         <div className="space-y-2">
@@ -146,16 +152,26 @@ const SalesTab = () => {
                         </div>
                         
                         <div className="space-y-2">
-                            <Label htmlFor="fecha_hora">Fecha y Hora</Label>
-                            <Input id="fecha_hora" name="fecha_hora" type="datetime-local" value={formData.fecha_hora} onChange={handleChange} required />
+                            <Label htmlFor="fecha">Fecha</Label>
+                            <Input id="fecha" name="fecha" type="date" value={formData.fecha} onChange={handleChange} required />
                         </div>
-                        
-                        <div className="space-y-2">
+                         <div className="space-y-2">
                             <Label htmlFor="cliente">Cliente</Label>
                             <Input id="cliente" name="cliente" value={formData.cliente} onChange={handleChange} />
                         </div>
                         
-                        <div className="md:col-span-3 pt-4">
+                        {/* Fila 2 */}
+                        <div className="space-y-2">
+                            <Label htmlFor="numero_comprobante_transferencia">Nº de Comprobante</Label>
+                            <Input id="numero_comprobante_transferencia" name="numero_comprobante_transferencia" value={formData.numero_comprobante_transferencia} onChange={handleChange} />
+                        </div>
+                        
+                        <div className="space-y-2 md:col-span-2">
+                            <Label htmlFor="notas">Notas (Opcional)</Label>
+                            <Input id="notas" name="notas" value={formData.notas} onChange={handleChange} />
+                        </div>
+                        
+                        <div className="flex items-end pt-2">
                             <Button type="submit" disabled={isSubmitting} className="w-full">
                                 {isSubmitting ? "Registrando Venta..." : "Registrar Venta"}
                             </Button>
