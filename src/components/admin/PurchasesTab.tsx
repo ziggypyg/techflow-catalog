@@ -233,11 +233,11 @@ const PurchasesTab = () => {
                         <Button type="submit" disabled={isSubmitting} className="w-full">
                             {isSubmitting ? "Calculando Costos..." : "Registrar Compra"}
                         </Button>
-                    </div>
+                   </div>
                 </form>
             </CardContent>
         </Card>
     );
 };
 
-export default PurchasesTab;
+export default PurchasesTab; // <-- Asegúrate de que este sea el final del archivo
