@@ -1,11 +1,10 @@
-import React, { useState, useEffect } from "react";
+import React, { useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Receipt } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
-import { supabase } from "@/integrations/supabase/client"; 
+import { supabase } from "@/integrations/supabase/client";
 
 const initialFormData = {
     'nro_de_pedido': '',
@@ -37,16 +36,16 @@ const TotalPedidosTab = () => {
             };
 
             const { error } = await supabase
-                .from('totales_pedidos') // <-- Nombre de la tabla
-                .insert([dataToInsert]); 
+                .from('totales_pedidos')
+                .upsert([dataToInsert], { onConflict: 'nro_de_pedido' }); // Usamos UPSERT para actualizar si ya existe
 
             if (error) throw error;
 
-            toast.success("Total de Pedido registrado exitosamente.");
+            toast.success(`Total Factura registrado/actualizado para Pedido N° ${formData.nro_de_pedido}.`);
             setFormData(initialFormData);
             
         } catch (error: any) {
-            console.error("Error al registrar Total de Pedido:", error);
+            console.error("Error al registrar Totales Pedidos:", error);
             toast.error("Error al guardar: " + error.message);
         } finally {
             setIsSubmitting(false);
@@ -56,9 +55,9 @@ const TotalPedidosTab = () => {
     return (
         <Card>
             <CardHeader>
-                <CardTitle>Gestión de Totales de Pedido</CardTitle>
+                <CardTitle>📄 Totales Pedidos (Costo Total Factura)</CardTitle>
                 <CardDescription>
-                    Registra el costo total de las facturas de tus pedidos (en USD).
+                    Registra el total facturado en USD de la orden completa.
                 </CardDescription>
             </CardHeader>
             <CardContent>
@@ -72,9 +71,9 @@ const TotalPedidosTab = () => {
                         <Input id="total_factura_usd" name="total_factura_usd" type="number" step="0.01" value={formData.total_factura_usd} onChange={handleChange} min="0" required />
                     </div>
                     
-                    <div className="md:col-span-3 pt-4">
+                    <div className="flex items-end pt-2">
                         <Button type="submit" disabled={isSubmitting} className="w-full">
-                            {isSubmitting ? "Registrando..." : "Registrar Total de Pedido"}
+                            {isSubmitting ? "Guardando..." : "Registrar/Actualizar Pedido"}
                         </Button>
                     </div>
                 </form>
